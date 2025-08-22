@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        ESMplus Core Helper
 // @namespace   esmplus-helper
-// @version     1.1.0
+// @version     1.2.1
 // @description Shared helpers for ESMplus tools (tokens, backoff fetch, LS, concurrency, UI helpers, z-index stack, drag)
 // @grant       none
 // ==/UserScript==
@@ -23,16 +23,35 @@
   // ---- z-index stack ----
   const Z_BASE = 2147480000; // 매우 높은 시작값
   let zTop = Z_BASE;
+
   function bringToFront(el) {
     if (!el) return;
     el.style.zIndex = String(++zTop);
   }
+
+  // 초기 계단 배치 (left/top 미설정 시)
+  function autoPlaceIfNeeded(panel) {
+    if (!panel) return;
+    const hasPos = (panel.style.left && panel.style.top);
+    if (hasPos) return;
+    if (!panel.hasAttribute('data-esm-panel')) {
+      panel.setAttribute('data-esm-panel', '1');
+    }
+    const count = document.querySelectorAll('[data-esm-panel]').length;
+    const delta = (count - 1) * 24;
+    panel.style.left  = `${20 + delta}px`;
+    panel.style.top   = `${20 + delta}px`;
+    panel.style.right = 'auto';
+  }
+
   function registerPanel(el, headerEl) {
+    if (!el) return;
+    autoPlaceIfNeeded(el);
     bringToFront(el);
     const bring = () => bringToFront(el);
     // pointerdown이 클릭/드래그 모두 포착
-    el.addEventListener('pointerdown', bring, { passive: true });
-    if (headerEl) headerEl.addEventListener('pointerdown', bring, { passive: true });
+    el.addEventListener('pointerdown', bring, { passive: true, capture: true });
+    if (headerEl) headerEl.addEventListener('pointerdown', bring, { passive: true, capture: true });
   }
 
   // ---- Utilities ----
@@ -129,6 +148,9 @@
   function tryDecode(s) { try { return decodeURIComponent(s); } catch { return s; } }
 
   // ---- Drag helper (패널 드래그 & 위치 저장) ----
+  // 헤더 안 인터랙티브 요소에서는 드래그 시작하지 않도록 개선
+  const INTERACTIVE_SELECTOR = 'button, input, select, textarea, a, label, [role="button"], .no-drag';
+
   function enableDrag(panelEl, headerEl, posKey) {
     const handle = headerEl || panelEl;
     if (!panelEl || !handle) return;
@@ -154,8 +176,13 @@
 
     // 모바일 스크롤/제스처 간섭 최소화
     try { handle.style.touchAction = 'none'; } catch {}
+    try { handle.style.cursor = 'move'; } catch {}
 
     const onDown = (e) => {
+      // 인터랙티브 요소 위면 드래그 시작 안 함
+      if (e.target && e.target.closest && e.target.closest(INTERACTIVE_SELECTOR)) {
+        return;
+      }
       if (e.button != null && e.button !== 0) return; // 좌클릭만
       dragging = true;
       bringToFront(panelEl);
@@ -228,6 +255,55 @@
     }
   }
 
+  // ---- 합성 헬퍼: 패널을 한 번에 연결 (선택) ----
+  function wirePanel({
+    panel, headerSel, bodySel, closeSel, minSel,
+    launcher, posKey, minKey
+  }) {
+    if (!panel) return;
+    const header  = headerSel ? panel.querySelector(headerSel) : null;
+    const body    = bodySel   ? panel.querySelector(bodySel)   : null;
+    const closeBt = closeSel  ? panel.querySelector(closeSel)  : null;
+    const minBt   = minSel    ? panel.querySelector(minSel)    : null;
+
+    registerPanel(panel, header);
+    enableDrag(panel, header, posKey);
+
+    // 버튼에서 드래그 간섭 차단
+    const stop = (e) => e.stopPropagation();
+    [closeBt, minBt].forEach(b=>{
+      if (!b) return;
+      ['pointerdown','mousedown','touchstart','click'].forEach(ev=>{
+        b.addEventListener(ev, stop, {passive:false});
+      });
+    });
+
+    // 닫기/최소화
+    if (closeBt && launcher) {
+      closeBt.addEventListener('click', (e)=>{
+        e.preventDefault();
+        panel.style.display = 'none';
+        launcher.style.display = 'block';
+      });
+    }
+    if (minBt && body) {
+      minBt.addEventListener('click', (e)=>{
+        e.preventDefault();
+        applyMinState(body, minKey, true);
+      });
+      applyMinState(body, minKey, false);
+    }
+
+    // 런처
+    if (launcher) {
+      launcher.addEventListener('click', ()=>{
+        panel.style.display = '';
+        launcher.style.display = 'none';
+        bringToFront(panel);
+      });
+    }
+  }
+
   // ---- Public API ----
   const api = {
     // constants
@@ -258,7 +334,8 @@
     enableDrag,
     applyMinState,
     bringToFront,
-    registerPanel
+    registerPanel,
+    wirePanel   // 선택 사용
   };
 
   window.esmplus = api;
