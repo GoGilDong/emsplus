@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        ESMplus Core Helper
 // @namespace   esmplus-helper
-// @version     1.2.1
+// @version     1.2.2
 // @description Shared helpers for ESMplus tools (tokens, backoff fetch, LS, concurrency, UI helpers, z-index stack, drag)
 // @grant       none
 // ==/UserScript==
@@ -11,17 +11,17 @@
   // singleton
   if (window.esmplus) return;
 
-  // ---- Config (수정은 setConfig로) ----
+  // ---- Config (set via setConfig) ----
   const CONFIG = {
     THROTTLE_MS: 0,       // per-request delay between tasks
     CONCURRENCY: 6,       // default concurrency
-    USE_BATCH: false,     // server batch support flag (노출은 안함)
+    USE_BATCH: false,     // server batch support flag
     TIMEOUT_MS: 10000,    // fetch timeout
     MAX_RETRY: 4          // exponential backoff retries
   };
 
   // ---- z-index stack ----
-  const Z_BASE = 2147480000; // 매우 높은 시작값
+  const Z_BASE = 2147480000; // very high base
   let zTop = Z_BASE;
 
   function bringToFront(el) {
@@ -29,7 +29,6 @@
     el.style.zIndex = String(++zTop);
   }
 
-  // 초기 계단 배치 (left/top 미설정 시)
   function autoPlaceIfNeeded(panel) {
     if (!panel) return;
     const hasPos = (panel.style.left && panel.style.top);
@@ -48,14 +47,15 @@
     if (!el) return;
     autoPlaceIfNeeded(el);
     bringToFront(el);
-    const bring = () => bringToFront(el);
-    // pointerdown이 클릭/드래그 모두 포착
-    el.addEventListener('pointerdown', bring, { passive: true, capture: true });
-    if (headerEl) headerEl.addEventListener('pointerdown', bring, { passive: true, capture: true });
+    const toFront = () => bringToFront(el);
+    // capture phase so it wins against children
+    el.addEventListener('pointerdown', toFront, { passive: true, capture: true });
+    if (headerEl) headerEl.addEventListener('pointerdown', toFront, { passive: true, capture: true });
   }
 
   // ---- Utilities ----
   const SLEEP = (ms) => new Promise(r => setTimeout(r, ms));
+
   const getLS = (k, d='') => {
     try { const v = localStorage.getItem(k); return v == null ? d : v; }
     catch { return d; }
@@ -101,7 +101,7 @@
 
         const status = res.status;
         const text = await res.text().catch(()=> '');
-        // 재시도 조건: 429 또는 5xx
+        // retry: 429 or 5xx
         if ((status === 429 || (status >= 500 && status < 600)) && attempt < MAX_RETRY) {
           await SLEEP(Math.min(2000, 200 * Math.pow(2, attempt - 1))); // 200,400,800,1600
           continue;
@@ -141,21 +141,23 @@
     const n = Number(v);
     return Number.isFinite(n) ? n.toLocaleString() : String(v);
   }
+
   function fixWidth(s, n) {
     const t = (s ?? '').toString();
     return t.length > n ? (t.slice(0, n - 1) + '…') : t.padEnd(n, ' ');
   }
+
   function tryDecode(s) { try { return decodeURIComponent(s); } catch { return s; } }
 
-  // ---- Drag helper (패널 드래그 & 위치 저장) ----
-  // 헤더 안 인터랙티브 요소에서는 드래그 시작하지 않도록 개선
+  // ---- Drag helper ----
+  // Do not start dragging from interactive elements
   const INTERACTIVE_SELECTOR = 'button, input, select, textarea, a, label, [role="button"], .no-drag';
 
   function enableDrag(panelEl, headerEl, posKey) {
     const handle = headerEl || panelEl;
     if (!panelEl || !handle) return;
 
-    // 저장된 위치 복원
+    // restore position
     try {
       const saved = getLS(`drag:${posKey}`, '');
       if (saved) {
@@ -163,27 +165,24 @@
         if (pos && Number.isFinite(pos.left) && Number.isFinite(pos.top)) {
           panelEl.style.left = `${pos.left}px`;
           panelEl.style.top  = `${pos.top}px`;
-          panelEl.style.right = 'auto'; // left/top 기준으로 이동
+          panelEl.style.right = 'auto';
         }
       }
     } catch {}
 
-    // 드래그 상태
     let dragging = false;
     let startX = 0, startY = 0;
     let baseLeft = 0, baseTop = 0;
-    const m = 10; // 화면 가장자리 마진
+    const margin = 10;
 
-    // 모바일 스크롤/제스처 간섭 최소화
     try { handle.style.touchAction = 'none'; } catch {}
     try { handle.style.cursor = 'move'; } catch {}
 
     const onDown = (e) => {
-      // 인터랙티브 요소 위면 드래그 시작 안 함
       if (e.target && e.target.closest && e.target.closest(INTERACTIVE_SELECTOR)) {
-        return;
+        return; // interactive: don't start drag
       }
-      if (e.button != null && e.button !== 0) return; // 좌클릭만
+      if (e.button != null && e.button !== 0) return; // left only
       dragging = true;
       bringToFront(panelEl);
       document.body.style.userSelect = 'none';
@@ -206,11 +205,11 @@
       let nx = baseLeft + (curX - startX);
       let ny = baseTop  + (curY - startY);
 
-      // 화면 경계 내로 클램프
-      const maxX = window.scrollX + window.innerWidth  - panelEl.offsetWidth  - m;
-      const maxY = window.scrollY + window.innerHeight - panelEl.offsetHeight - m;
-      nx = Math.max(window.scrollX + m, Math.min(nx, Math.max(window.scrollX + m, maxX)));
-      ny = Math.max(window.scrollY + m, Math.min(ny, Math.max(window.scrollY + m, maxY)));
+      // clamp to viewport
+      const maxX = window.scrollX + window.innerWidth  - panelEl.offsetWidth  - margin;
+      const maxY = window.scrollY + window.innerHeight - panelEl.offsetHeight - margin;
+      nx = Math.max(window.scrollX + margin, Math.min(nx, Math.max(window.scrollX + margin, maxX)));
+      ny = Math.max(window.scrollY + margin, Math.min(ny, Math.max(window.scrollY + margin, maxY)));
 
       panelEl.style.left = `${nx}px`;
       panelEl.style.top  = `${ny}px`;
@@ -223,7 +222,7 @@
       document.body.style.userSelect = '';
       try { handle.releasePointerCapture(e.pointerId); } catch {}
 
-      // 위치 저장
+      // persist
       try {
         const rect = panelEl.getBoundingClientRect();
         const pos = { left: Math.max(0, rect.left + window.scrollX), top: Math.max(0, rect.top + window.scrollY) };
@@ -231,31 +230,30 @@
       } catch {}
     };
 
-    // pointer events
     handle.addEventListener('pointerdown', onDown);
     window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointerup',   onUp);
     window.addEventListener('pointercancel', onUp);
   }
 
-  // ---- 최소화/복원 helper (display 토글 + 저장) ----
-  // toggle=true 이면 즉시 토글. false면 저장된 값 읽어 초기 상태 반영.
+  // ---- Minimize helper ----
+  // toggle=true → toggle now; toggle=false → apply saved state
   function applyMinState(bodyEl, storageKey, toggle=false) {
     if (!bodyEl) return false;
     const key = `min:${storageKey}`;
     if (toggle) {
-      const nextMin = bodyEl.style.display !== 'none';
-      bodyEl.style.display = nextMin ? 'none' : '';
-      setLS(key, nextMin ? '1' : '0');
-      return !nextMin;
+      const willMin = bodyEl.style.display !== 'none';
+      bodyEl.style.display = willMin ? 'none' : '';
+      setLS(key, willMin ? '1' : '0');
+      return !willMin;
     } else {
-      const saved = getLS(key, '0') === '1';
-      bodyEl.style.display = saved ? 'none' : '';
-      return !saved;
+      const savedMin = getLS(key, '0') === '1';
+      bodyEl.style.display = savedMin ? 'none' : '';
+      return !savedMin;
     }
   }
 
-  // ---- 합성 헬퍼: 패널을 한 번에 연결 (선택) ----
+  // ---- Wire helper: connect panel controls in one shot ----
   function wirePanel({
     panel, headerSel, bodySel, closeSel, minSel,
     launcher, posKey, minKey
@@ -269,7 +267,7 @@
     registerPanel(panel, header);
     enableDrag(panel, header, posKey);
 
-    // 버튼에서 드래그 간섭 차단
+    // prevent drag interference from buttons
     const stop = (e) => e.stopPropagation();
     [closeBt, minBt].forEach(b=>{
       if (!b) return;
@@ -278,23 +276,25 @@
       });
     });
 
-    // 닫기/최소화
-    if (closeBt && launcher) {
+    // Close(X): minimize in place (show header only)
+    if (closeBt && body) {
       closeBt.addEventListener('click', (e)=>{
         e.preventDefault();
-        panel.style.display = 'none';
-        launcher.style.display = 'block';
+        applyMinState(body, minKey, true);
       });
     }
+
+    // Minimize(–): same behavior
     if (minBt && body) {
       minBt.addEventListener('click', (e)=>{
         e.preventDefault();
         applyMinState(body, minKey, true);
       });
+      // apply saved state on load
       applyMinState(body, minKey, false);
     }
 
-    // 런처
+    // Launcher: kept for compatibility (won't be triggered by X now)
     if (launcher) {
       launcher.addEventListener('click', ()=>{
         panel.style.display = '';
@@ -335,7 +335,7 @@
     applyMinState,
     bringToFront,
     registerPanel,
-    wirePanel   // 선택 사용
+    wirePanel
   };
 
   window.esmplus = api;
