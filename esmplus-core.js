@@ -35,6 +35,28 @@
     getLS: (k, d='') => localStorage.getItem(k) ?? d,
     setLS: (k, v) => localStorage.setItem(k, v),
 
+    // z-index stack (페이지 위로 띄우되, 서로 간에는 순서를 조정)
+    const Z_BASE = 2147480000; // 매우 높은 시작값(사이트 오버레이 위)
+    let zTop = Z_BASE;
+
+    function bringToFront(el) {
+      // 가장 위로
+      el.style.zIndex = String(++zTop);
+    }
+    
+    function registerPanel(el, headerEl) {
+      // 초기 등록 시에도 맨 위로
+      bringToFront(el);
+      const bring = () => bringToFront(el);
+      // 마우스/터치 모두 대응
+      el.addEventListener('pointerdown', bring, { passive: true });
+      if (headerEl) headerEl.addEventListener('pointerdown', bring, { passive: true });
+    }
+
+    // 공개 API로 노출
+    api.bringToFront = bringToFront;
+    api.registerPanel = registerPanel;
+
     collectTokens() {
       const tokens = [];
       document.querySelectorAll('input[name="__RequestVerificationToken"]').forEach(i => i.value && tokens.push(i.value));
